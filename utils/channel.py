@@ -1,9 +1,10 @@
 from utils.config import config, resource_path
+import utils.constants as constants
+from utils.constants import get_resolution_value
 from utils.tools import (
     check_url_by_patterns,
     get_total_urls_from_info_list,
     process_nested_dict,
-    get_resolution_value,
     add_url_info,
     remove_cache_info,
 )
@@ -25,15 +26,7 @@ import pickle
 import copy
 import datetime
 
-log_dir = "output"
-log_file = "result_new.log"
-log_path = os.path.join(log_dir, log_file)
 handler = None
-
-url_regex = r"\b((https?):\/\/)?(\[[0-9a-fA-F:]+\]|([\w-]+\.)+[\w-]+)(:[0-9]{1,5})?(\/[^\s]*)?\b"
-rtp_regex = r"^(.*?),(rtp://.*)?$"
-txt_regex = r"^(.*?)(?:,)?((?!#genre#)" + url_regex + r")?$"
-m3u_regex = r"^#EXTINF:-1.*?,(.*?)\n" + url_regex + r"$"
 
 
 def setup_logging():
@@ -41,9 +34,9 @@ def setup_logging():
     Setup logging
     """
     global handler
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    handler = RotatingFileHandler(log_path, encoding="utf-8")
+    if not os.path.exists(constants.log_dir):
+        os.makedirs(constants.log_dir)
+    handler = RotatingFileHandler(constants.log_path, encoding="utf-8")
     logging.basicConfig(
         handlers=[handler],
         format="%(message)s",
@@ -60,16 +53,16 @@ def cleanup_logging():
         for handler in logging.root.handlers[:]:
             handler.close()
             logging.root.removeHandler(handler)
-    if os.path.exists(log_path):
-        os.remove(log_path)
+    if os.path.exists(constants.log_path):
+        os.remove(constants.log_path)
 
 
-def get_name_url(content, m3u=False, rtp=False, check_url=True):
+def get_name_url(content, pattern, multiline=False, check_url=True):
     """
     Get channel name and url from content
     """
-    regex = m3u_regex if m3u else rtp_regex if rtp else txt_regex
-    matches = re.findall(regex, content, re.MULTILINE)
+    flag = re.MULTILINE if multiline else 0
+    matches = re.findall(pattern, content, flag)
     channels = [
         {"name": match[0].strip(), "url": match[1].strip()}
         for match in matches
@@ -87,9 +80,11 @@ def get_channel_data_from_file(channels, file, use_old):
     for line in file:
         line = line.strip()
         if "#genre#" in line:
-            current_category = line.split(",")[0]
+            current_category = line.partition(",")[0]
         else:
-            name_url = get_name_url(line, check_url=False)
+            name_url = get_name_url(
+                line, pattern=constants.demo_txt_pattern, check_url=False
+            )
             if name_url and name_url[0]:
                 name = name_url[0]["name"]
                 url = name_url[0]["url"]
@@ -107,20 +102,19 @@ def get_channel_items():
     """
     Get the channel items from the source file
     """
-    user_source_file = config.get("Settings", "source_file", fallback="config/demo.txt")
+    user_source_file = resource_path(constants.source_file)
     channels = defaultdict(lambda: defaultdict(list))
-    open_use_old_result = config.getboolean(
-        "Settings", "open_use_old_result", fallback=True
-    )
 
-    if os.path.exists(resource_path(user_source_file)):
-        with open(resource_path(user_source_file), "r", encoding="utf-8") as file:
-            channels = get_channel_data_from_file(channels, file, open_use_old_result)
+    if os.path.exists(user_source_file):
+        with open(user_source_file, "r", encoding="utf-8") as file:
+            channels = get_channel_data_from_file(
+                channels, file, constants.open_use_old_result
+            )
 
-    if open_use_old_result:
+    if constants.open_use_old_result:
         result_cache_path = resource_path("output/result_cache.pkl")
         if os.path.exists(result_cache_path):
-            with open(resource_path("output/result_cache.pkl"), "rb") as file:
+            with open(result_cache_path, "rb") as file:
                 old_result = pickle.load(file)
                 for cate, data in channels.items():
                     if cate in old_result:
@@ -132,53 +126,16 @@ def get_channel_items():
     return channels
 
 
-open_keep_all = config.getboolean("Settings", "open_keep_all", fallback=False)
-
-
 def format_channel_name(name):
     """
     Format the channel name with sub and replace and lower
     """
-    if open_keep_all:
+    if constants.open_keep_all:
         return name
     cc = OpenCC("t2s")
     name = cc.convert(name)
-    sub_pattern = r"-|_|\((.*?)\)|\（(.*?)\）|\[(.*?)\]|\「(.*?)\」| |｜|频道|普清|标清|高清|HD|hd|超清|超高|超高清|中央|央视|台|电信|联通|移动"
-    name = re.sub(sub_pattern, "", name)
-    replace_dict = {
-        "plus": "+",
-        "PLUS": "+",
-        "＋": "+",
-        "CCTV1综合": "CCTV1",
-        "CCTV2财经": "CCTV2",
-        "CCTV3综艺": "CCTV3",
-        "CCTV4国际": "CCTV4",
-        "CCTV4中文国际": "CCTV4",
-        "CCTV4欧洲": "CCTV4",
-        "CCTV5体育": "CCTV5",
-        "CCTV5+体育赛视": "CCTV5+",
-        "CCTV5+体育赛事": "CCTV5+",
-        "CCTV5+体育": "CCTV5+",
-        "CCTV6电影": "CCTV6",
-        "CCTV7军事": "CCTV7",
-        "CCTV7军农": "CCTV7",
-        "CCTV7农业": "CCTV7",
-        "CCTV7国防军事": "CCTV7",
-        "CCTV8电视剧": "CCTV8",
-        "CCTV9记录": "CCTV9",
-        "CCTV9纪录": "CCTV9",
-        "CCTV10科教": "CCTV10",
-        "CCTV11戏曲": "CCTV11",
-        "CCTV12社会与法": "CCTV12",
-        "CCTV13新闻": "CCTV13",
-        "CCTV新闻": "CCTV13",
-        "CCTV14少儿": "CCTV14",
-        "CCTV15音乐": "CCTV15",
-        "CCTV16奥林匹克": "CCTV16",
-        "CCTV17农业农村": "CCTV17",
-        "CCTV17农业": "CCTV17",
-    }
-    for old, new in replace_dict.items():
+    name = re.sub(constants.sub_pattern, "", name)
+    for old, new in constants.replace_dict.items():
         name = name.replace(old, new)
     return name.lower()
 
@@ -187,7 +144,7 @@ def channel_name_is_equal(name1, name2):
     """
     Check if the channel name is equal
     """
-    if open_keep_all:
+    if constants.open_keep_all:
         return True
     name1_format = format_channel_name(name1)
     name2_format = format_channel_name(name2)
@@ -265,21 +222,15 @@ def get_channel_multicast_region_type_list(result):
     """
     Get the channel multicast region type list from result
     """
-    config_region_list = set(
-        region.strip()
-        for region in config.get(
-            "Settings", "multicast_region_list", fallback="全部"
-        ).split(",")
-        if region.strip()
-    )
+    region_list = constants.multicast_region_list
     region_type_list = {
         (region, type)
         for region_type in result.values()
         for region, types in region_type.items()
-        if "all" in config_region_list
-        or "ALL" in config_region_list
-        or "全部" in config_region_list
-        or region in config_region_list
+        if "all" in region_list
+        or "ALL" in region_list
+        or "全部" in region_list
+        or region in region_list
         for type in types
     }
     return list(region_type_list)
@@ -290,7 +241,6 @@ def get_channel_multicast_result(result, search_result):
     Get the channel multicast info result by result and search result
     """
     info_result = {}
-    open_sort = config.getboolean("Settings", "open_sort", fallback=True)
     for name, result_obj in result.items():
         info_list = [
             (
@@ -299,7 +249,7 @@ def get_channel_multicast_result(result, search_result):
                         f"http://{url}/rtp/{ip}",
                         f"{result_region}{result_type}组播源|cache:{url}",
                     )
-                    if open_sort
+                    if constants.open_sort
                     else add_url_info(
                         f"http://{url}/rtp/{ip}", f"{result_region}{result_type}组播源"
                     )
@@ -457,11 +407,14 @@ def update_channel_urls_txt(cate, name, urls, callback=None):
     with open(filename, "a", encoding="utf-8") as f:
         if genre_line not in content:
             f.write(genre_line)
-        for url in urls:
-            if url is not None:
-                f.write(name + "," + url + "\n")
-                if callback:
-                    callback()
+        if urls:
+            for url in urls:
+                if url is not None:
+                    f.write(f"{name},{url}\n")
+                    if callback:
+                        callback()
+        else:
+            f.write(f"{name},url\n")
 
 
 def get_channel_url(text):
@@ -470,7 +423,7 @@ def get_channel_url(text):
     """
     url = None
     url_search = re.search(
-        url_regex,
+        constants.url_pattern,
         text,
     )
     if url_search:
@@ -535,18 +488,35 @@ def append_data_to_info_data(info_data, cate, name, data, origin=None, check=Tru
             continue
 
 
-def append_total_data(*args, **kwargs):
+def get_origin_method_name(method):
     """
-    Append total channel data
+    Get the origin method name
     """
-    if open_keep_all:
-        append_all_method_data_keep_all(*args, **kwargs)
-    else:
-        append_all_method_data(*args, **kwargs)
+    if method in ["hotel_tonkiang", "hotel_fofa"] and not constants.open_hotel:
+        return None
+    return "hotel" if method.startswith("hotel_") else method
 
 
-def append_all_method_data(
+def append_old_data_to_info_data(info_data, cate, name, data):
+    """
+    Append old channel data to total info data
+    """
+    append_data_to_info_data(
+        info_data,
+        cate,
+        name,
+        data,
+    )
+    print(name, "old:", len(data), end=", ")
+    print(
+        "total:",
+        len(info_data.get(cate, {}).get(name, [])),
+    )
+
+
+def append_total_data(
     items,
+    names,
     data,
     hotel_fofa_result=None,
     multicast_result=None,
@@ -557,105 +527,48 @@ def append_all_method_data(
     """
     Append all method data to total info data
     """
+    total_result = [
+        ("hotel_fofa", hotel_fofa_result),
+        ("multicast", multicast_result),
+        ("hotel_tonkiang", hotel_tonkiang_result),
+        ("subscribe", subscribe_result),
+        ("online_search", online_search_result),
+    ]
     for cate, channel_obj in items:
         for name, old_info_list in channel_obj.items():
             print(f"{name}:", end=" ")
-            for method, result in [
-                ("hotel_fofa", hotel_fofa_result),
-                ("multicast", multicast_result),
-                ("hotel_tonkiang", hotel_tonkiang_result),
-                ("subscribe", subscribe_result),
-                ("online_search", online_search_result),
-            ]:
-                if config.getboolean("Settings", f"open_{method}", fallback=None):
-                    if (
-                        method == "hotel_tonkiang" or method == "hotel_fofa"
-                    ) and config.getboolean(
-                        "Settings", f"open_hotel", fallback=True
-                    ) == False:
+            for method, result in total_result:
+                if constants.open_method[method]:
+                    origin_method = get_origin_method_name(method)
+                    if not origin_method:
                         continue
                     name_results = get_channel_results_by_name(name, result)
-                    origin_method = (
-                        "hotel"
-                        if method == "hotel_tonkiang" or method == "hotel_fofa"
-                        else method
-                    )
                     append_data_to_info_data(
                         data, cate, name, name_results, origin=origin_method
                     )
                     print(f"{method.capitalize()}:", len(name_results), end=", ")
-            total_channel_data_len = len(data.get(cate, {}).get(name, []))
-            if total_channel_data_len == 0 or config.getboolean(
-                "Settings", "open_use_old_result", fallback=True
-            ):
-                append_data_to_info_data(
-                    data,
-                    cate,
-                    name,
-                    old_info_list,
-                )
-                print("old:", len(old_info_list), end=", ")
-            print(
-                "total:",
-                len(data.get(cate, {}).get(name, [])),
-            )
-
-
-def append_all_method_data_keep_all(
-    items,
-    data,
-    hotel_fofa_result=None,
-    multicast_result=None,
-    hotel_tonkiang_result=None,
-    subscribe_result=None,
-    online_search_result=None,
-):
-    """
-    Append all method data to total info data, keep all channel name and urls
-    """
-    for cate, channel_obj in items:
-        for method, result in [
-            ("hotel_fofa", hotel_fofa_result),
-            ("multicast", multicast_result),
-            ("hotel_tonkiang", hotel_tonkiang_result),
-            ("subscribe", subscribe_result),
-            ("online_search", online_search_result),
-        ]:
-            if result and config.getboolean(
-                "Settings", f"open_{method}", fallback=None
-            ):
-                if (
-                    method == "hotel_tonkiang" or method == "hotel_fofa"
-                ) and config.getboolean(
-                    "Settings", f"open_hotel", fallback=True
-                ) == False:
+            if constants.open_use_old_result:
+                append_old_data_to_info_data(data, cate, name, old_info_list)
+    if constants.open_keep_all:
+        extra_cate = "📥其它频道"
+        for method, result in total_result:
+            if constants.open_method[method]:
+                origin_method = get_origin_method_name(method)
+                if not origin_method:
                     continue
-                origin_method = (
-                    "hotel"
-                    if method == "hotel_tonkiang" or method == "hotel_fofa"
-                    else method
-                )
                 for name, urls in result.items():
+                    if name in names:
+                        continue
                     print(f"{name}:", end=" ")
                     append_data_to_info_data(
-                        data, cate, name, urls, origin=origin_method
+                        data, extra_cate, name, urls, origin=origin_method
                     )
                     print(name, f"{method.capitalize()}:", len(urls), end=", ")
-                    if config.getboolean(
-                        "Settings", "open_use_old_result", fallback=True
-                    ):
+                    if constants.open_use_old_result:
                         old_info_list = channel_obj.get(name, [])
-                        append_data_to_info_data(
-                            data,
-                            cate,
-                            name,
-                            old_info_list,
+                        append_old_data_to_info_data(
+                            data, extra_cate, name, old_info_list
                         )
-                        print(name, "old:", len(old_info_list), end=", ")
-                    print(
-                        "total:",
-                        len(data.get(cate, {}).get(name, [])),
-                    )
 
 
 async def sort_channel_list(
@@ -699,20 +612,16 @@ async def process_sort_channel_list(data, ipv6=False, callback=None):
     """
     Processs the sort channel list
     """
-    open_ffmpeg = config.getboolean("Settings", "open_ffmpeg", fallback=True)
-    ipv_type = config.get("Settings", "ipv_type", fallback="全部").lower()
-    open_filter_resolution = config.getboolean(
-        "Settings", "open_filter_resolution", fallback=True
+    open_ipv6 = (
+        "ipv6" in constants.ipv_type
+        or "all" in constants.ipv_type
+        or "全部" in constants.ipv_type
     )
-    min_resolution = get_resolution_value(
-        config.get("Settings", "min_resolution", fallback="1920x1080")
-    )
-    open_ipv6 = "ipv6" in ipv_type or "all" in ipv_type or "全部" in ipv_type
     ipv6_proxy = None if not open_ipv6 or ipv6 else "http://www.ipv6proxy.net/go.php?u="
     ffmpeg_installed = is_ffmpeg_installed()
-    if open_ffmpeg and not ffmpeg_installed:
+    if constants.open_ffmpeg and not ffmpeg_installed:
         print("FFmpeg is not installed, using requests for sorting.")
-    is_ffmpeg = open_ffmpeg and ffmpeg_installed
+    is_ffmpeg = constants.open_ffmpeg and ffmpeg_installed
     semaphore = asyncio.Semaphore(5)
     need_sort_data = copy.deepcopy(data)
     process_nested_dict(need_sort_data, seen=set(), flag=r"cache:(.*)")
@@ -725,8 +634,8 @@ async def process_sort_channel_list(data, ipv6=False, callback=None):
                 semaphore,
                 ffmpeg=is_ffmpeg,
                 ipv6_proxy=ipv6_proxy,
-                filter_resolution=open_filter_resolution,
-                min_resolution=min_resolution,
+                filter_resolution=constants.open_filter_resolution,
+                min_resolution=constants.min_resolution_value,
                 callback=callback,
             )
         )
@@ -763,9 +672,9 @@ async def process_sort_channel_list(data, ipv6=False, callback=None):
                     response_time, resolution = cache
                     if response_time and response_time != float("inf"):
                         if resolution:
-                            if open_filter_resolution:
+                            if constants.open_filter_resolution:
                                 resolution_value = get_resolution_value(resolution)
-                                if resolution_value < min_resolution:
+                                if resolution_value < constants.min_resolution_value:
                                     continue
                             url = add_url_info(url, resolution)
                         append_data_to_info_data(
@@ -781,23 +690,18 @@ async def process_sort_channel_list(data, ipv6=False, callback=None):
     return sort_data
 
 
-def write_channel_to_file(items, data, ipv6=False, callback=None):
+def write_channel_to_file(data, ipv6=False, callback=None):
     """
     Write channel to file
     """
-    open_update_time = config.getboolean("Settings", "open_update_time", fallback=True)
-    if open_update_time:
+    if constants.open_update_time:
         now = datetime.datetime.now()
         if os.environ.get("GITHUB_ACTIONS"):
             now += datetime.timedelta(hours=8)
         update_time = now.strftime("%Y-%m-%d %H:%M:%S")
         update_channel_urls_txt("更新时间", f"{update_time}", ["url"])
-    result_items = (
-        data.items()
-        if config.getboolean("Settings", "open_keep_all", fallback=False)
-        else items
-    )
-    for cate, channel_obj in result_items:
+    no_result_name = []
+    for cate, channel_obj in data.items():
         print(f"\n{cate}:", end=" ")
         channel_obj_keys = channel_obj.keys()
         names_len = len(list(channel_obj_keys))
@@ -806,7 +710,17 @@ def write_channel_to_file(items, data, ipv6=False, callback=None):
             channel_urls = get_total_urls_from_info_list(info_list, ipv6=ipv6)
             end_char = ", " if i < names_len - 1 else ""
             print(f"{name}:", len(channel_urls), end=end_char)
+            if not channel_urls:
+                no_result_name.append(name)
+                continue
             update_channel_urls_txt(cate, name, channel_urls, callback=callback)
+        print()
+    if no_result_name:
+        print("🈳No result channel name:")
+        for i, name in enumerate(no_result_name):
+            end_char = ", " if i < len(no_result_name) - 1 else ""
+            print(name, end=end_char)
+            update_channel_urls_txt("🈳无结果频道", name, [])
         print()
 
 
@@ -830,25 +744,19 @@ def get_multicast_fofa_search_urls():
     """
     Get the fofa search urls for multicast
     """
-    config_region_list = [
-        region.strip()
-        for region in config.get(
-            "Settings", "multicast_region_list", fallback="全部"
-        ).split(",")
-        if region.strip()
-    ]
     rtp_file_names = []
     for filename in os.listdir(resource_path("config/rtp")):
         if filename.endswith(".txt") and "_" in filename:
             filename = filename.replace(".txt", "")
             rtp_file_names.append(filename)
+    region_list = constants.multicast_region_list
     region_type_list = [
         (parts[0], parts[1])
         for name in rtp_file_names
-        if (parts := name.split("_"))[0] in config_region_list
-        or "all" in config_region_list
-        or "ALL" in config_region_list
-        or "全部" in config_region_list
+        if (parts := name.partition("_"))[0] in region_list
+        or "all" in region_list
+        or "ALL" in region_list
+        or "全部" in region_list
     ]
     search_urls = []
     for region, type in region_type_list:
@@ -869,13 +777,13 @@ def get_channel_data_cache_with_compare(data, new_data):
         for name, url_info in obj.items():
             if url_info and cate in data and name in data[cate]:
                 new_urls = {
-                    new_url.split("$", 1)[0]: new_resolution
+                    new_url.partition("$")[0]: new_resolution
                     for new_url, _, new_resolution, _ in url_info
                 }
                 updated_data = []
                 for info in data[cate][name]:
                     url, date, resolution, origin = info
-                    base_url = url.split("$", 1)[0]
+                    base_url = url.partition("$")[0]
                     if base_url in new_urls:
                         resolution = new_urls[base_url]
                         updated_data.append((url, date, resolution, origin))
