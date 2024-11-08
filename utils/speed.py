@@ -3,12 +3,11 @@ from time import time
 import asyncio
 import re
 from utils.config import config
-import utils.constants as constants
-from utils.tools import is_ipv6, add_url_info, remove_cache_info
+from utils.tools import is_ipv6, add_url_info, remove_cache_info, get_resolution_value
 import subprocess
 
 
-async def get_speed(url, timeout=constants.sort_timeout, proxy=None):
+async def get_speed(url, timeout=config.sort_timeout, proxy=None):
     """
     Get the speed of the url
     """
@@ -44,7 +43,7 @@ def is_ffmpeg_installed():
         return False
 
 
-async def ffmpeg_url(url, timeout=constants.sort_timeout):
+async def ffmpeg_url(url, timeout=config.sort_timeout):
     """
     Get url info by ffmpeg
     """
@@ -104,8 +103,6 @@ async def check_stream_speed(url_info):
         frame, resolution = get_video_info(video_info)
         if frame is None or frame == float("inf"):
             return float("inf")
-        if resolution:
-            url_info[0] = add_url_info(url, resolution)
         url_info[2] = resolution
         return (url_info, frame)
     except Exception as e:
@@ -170,10 +167,6 @@ async def get_speed_by_info(
                 callback()
 
 
-response_time_weight = config.getfloat("Settings", "response_time_weight", fallback=0.5)
-resolution_weight = config.getfloat("Settings", "resolution_weight", fallback=0.5)
-
-
 async def sort_urls_by_speed_and_resolution(
     data, ffmpeg=False, ipv6_proxy=None, callback=None
 ):
@@ -192,13 +185,11 @@ async def sort_urls_by_speed_and_resolution(
     valid_response = [res for res in response if res != float("inf")]
 
     def combined_key(item):
-        (_, _, resolution), response_time = item
-        resolution_value = (
-            constants.get_resolution_value(resolution) if resolution else 0
-        )
+        (_, _, resolution, _), response_time = item
+        resolution_value = get_resolution_value(resolution) if resolution else 0
         return (
-            -(response_time_weight * response_time)
-            + resolution_weight * resolution_value
+            -(config.response_time_weight * response_time)
+            + config.resolution_weight * resolution_value
         )
 
     sorted_res = sorted(valid_response, key=combined_key, reverse=True)
